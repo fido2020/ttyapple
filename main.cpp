@@ -29,7 +29,29 @@
 #define HALFBLOCK_TOP_CHARACTER {0xE2, 0x96, 0x80}
 #define HALFBLOCK_BOTTOM_CHARACTER {0xE2, 0x96, 0x84}
 
-void load_image_data(const char* str, std::vector<std::vector<uint8_t>>& data) {
+// Downscale an image
+// using a really dodgy nearest neighbour algorithm
+template<typename Pixel>
+std::vector<Pixel*> downscale_image(Pixel** rows, int sourceWidth, int sourceHeight, int destWidth, int destHeight) {
+    assert(sourceWidth > destWidth);
+    assert(sourceHeight > destHeight);
+    
+    std::vector<Pixel*> result;
+    for(unsigned i = 0; i < destHeight; i++) {
+        Pixel* row = new Pixel[destWidth];
+
+        Pixel* source = rows[sourceWidth * i / destWidth];
+        for(unsigned j = 0; j < destWidth; j++) {
+            row[j] = source[sourceHeight * j / destHeight];
+        }
+
+        result.push_back(row);
+    }
+
+    return std::move(result);
+}
+
+void load_image_data(const char* str, std::vector<uint8_t*>& data, int sWidth, int sHeight) {
     FILE* imageFile = fopen(str, "rb");
     assert(imageFile);
 
@@ -74,49 +96,49 @@ void load_image_data(const char* str, std::vector<std::vector<uint8_t>>& data) {
     assert(height < INT_MAX);
     printf("%d, %d\n", width, height);
 
+    std::vector<uint8_t*> rows;
     if(png_get_color_type(png, info) == PNG_COLOR_TYPE_GRAY) {
         for (png_uint_32 i = 0; i < height; i++) {
-            std::vector<uint8_t> row;
-            row.resize(width);
+            uint8_t* row = new uint8_t[width];
 
-            png_read_row(png, (uint8_t*)row.data(), NULL);
+            png_read_row(png, (uint8_t*)row, NULL);
 
-            data.push_back(std::move(row));
+            rows.push_back(row);
         }
     } else {
         for (png_uint_32 i = 0; i < height; i++) {
-            std::vector<uint8_t> row;
-            row.resize(width);
+            uint8_t* row = new uint8_t[width];
 
             uint32_t rgbRow[width];
             png_read_row(png, (uint8_t*)rgbRow, NULL);
 
             for(unsigned i = 0; i < width; i++) {
                 uint32_t color = rgbRow[i];
-                row.push_back((color & 0xff) | ((color >> 8) & 0xff) | ((color >> 16) & 0xff));
+                row[i] = ((color & 0xff) | ((color >> 8) & 0xff) | ((color >> 16) & 0xff));
             }
 
-            data.push_back(std::move(row));
+            rows.push_back(row);
         }
     }
 
     png_destroy_read_struct(&png, &info, nullptr);
 
+    data = downscale_image<uint8_t>(rows.data(), width, height, sWidth, sHeight);
+
+    for(const auto& r : rows) {
+        delete r;
+    }
+
     fclose(imageFile);
 }
 
-void frame_data_to_string(const std::vector<uint8_t>& top, const std::vector<uint8_t>& bottom, std::vector<char>& outString) {
-    const uint8_t* tPtr = top.data();
-    const uint8_t* tEnd = top.data() + top.size();
-    const uint8_t* bPtr = bottom.data();
-    const uint8_t* bEnd = bottom.data() + bottom.size();
-
-    while(tPtr < tEnd) {
-        //printf("%x,", *p);
+void frame_data_to_string(uint8_t* top, uint8_t* bottom, unsigned width, std::vector<char>& outString) {
+    const uint8_t* end = top + width;
+    while(top < end) {
         // Cut out any alpha
         // Get rid of dark greys
-        if((*tPtr++) & 0xf0) {
-            if((*bPtr++) & 0xf0) {
+        if((*top++) & 0xf0) {
+            if((*bottom++) & 0xf0) {
                 const unsigned char block[3] = BLOCK_CHARACTER;
                 outString.resize(outString.size() + 3);
 
@@ -127,7 +149,7 @@ void frame_data_to_string(const std::vector<uint8_t>& top, const std::vector<uin
 
                 memcpy(outString.data() + outString.size() - 3, block, 3);
             }
-        } else if((*bPtr++) & 0xf0) {
+        } else if((*bottom++) & 0xf0) {
             const unsigned char block[3] = HALFBLOCK_BOTTOM_CHARACTER;
             outString.resize(outString.size() + 3);
 
@@ -148,29 +170,45 @@ void print_frame_data(std::vector<std::vector<char>>& rows) {
     }
 }
 
+void print_usage() {
+    printf("Usage: terminalapple <video|frames> <file>");
+}
+
 int main(int argc, char** argv) {
-    if(argc < 2) {
-        printf("Usage: terminalapple <file>");
+    if(argc < 3) {
+        print_usage();
         return 1;
     }
 
-    for(unsigned i = 1; i <= 7777; i++) {
-        char filepath[PATH_MAX];
-        snprintf(filepath, PATH_MAX, "%s/frame%03d.png", argv[1], i);
+    if(!strcmp(argv[1], "frames")) {
+        for(unsigned i = 1; i <= 7777; i++) {
+            char filepath[PATH_MAX];
+            snprintf(filepath, PATH_MAX, "%s/frame%03d.png", argv[1], i);
 
-        std::vector<std::vector<uint8_t>> frameData;
-        load_image_data(filepath, frameData);
+            std::vector<uint8_t*> frameData;
+            load_image_data(filepath, frameData, 96, 64);
 
-        std::vector<std::vector<char>> strings;
+            std::vector<std::vector<char>> strings;
 
-        for(unsigned i = 0; i < frameData.size(); i += 2) {
-            std::vector<char> string = {};
-            frame_data_to_string(frameData[i], frameData[i + 1], string);
-            assert(string.back() == 0);
+            for(unsigned i = 0; i < frameData.size(); i += 2) {
+                std::vector<char> string = {};
+                frame_data_to_string(frameData[i], frameData[i + 1], 96, string);
+                delete frameData[i];
+                delete frameData[i + 1];
 
-            strings.push_back(std::move(string));
+                assert(string.back() == 0);
+
+                strings.push_back(std::move(string));
+            }
+            print_frame_data(strings);
+            usleep(1000000 / 24);
         }
-        print_frame_data(strings);
-        usleep(1000000 / 24);
+    } else if(!strcmp(argv[1], "video")) {
+        // TODO
+    } else {
+        print_usage();
+        return 1;
     }
+
+    return 0;
 }
