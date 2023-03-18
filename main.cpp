@@ -1,29 +1,17 @@
-// Copyright 2023 JJ Roberts-White
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the “Software”), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions: The above copyright
-// notice and this permission notice shall be included in all copies or
-// substantial portions of the Software. THE SOFTWARE IS PROVIDED “AS IS”,
-// WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-// TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
-// FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
-// THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
 #include <assert.h>
 
 #include <unistd.h>
 #include <png.h>
+#include <getopt.h>
 
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+
+#include "logger.h"
+#include "stream_context.h"
 
 #define BLOCK_CHARACTER {0xE2,0x96,0x88}
 #define HALFBLOCK_TOP_CHARACTER {0xE2, 0x96, 0x80}
@@ -94,7 +82,6 @@ void load_image_data(const char* str, std::vector<uint8_t*>& data, int sWidth, i
 
     assert(width < INT_MAX);
     assert(height < INT_MAX);
-    printf("%d, %d\n", width, height);
 
     std::vector<uint8_t*> rows;
     if(png_get_color_type(png, info) == PNG_COLOR_TYPE_GRAY) {
@@ -137,8 +124,8 @@ void frame_data_to_string(uint8_t* top, uint8_t* bottom, unsigned width, std::ve
     while(top < end) {
         // Cut out any alpha
         // Get rid of dark greys
-        if((*top++) & 0xf0) {
-            if((*bottom++) & 0xf0) {
+        if((*top++) & 0xc0) {
+            if((*bottom++) & 0xc0) {
                 const unsigned char block[3] = BLOCK_CHARACTER;
                 outString.resize(outString.size() + 3);
 
@@ -149,7 +136,7 @@ void frame_data_to_string(uint8_t* top, uint8_t* bottom, unsigned width, std::ve
 
                 memcpy(outString.data() + outString.size() - 3, block, 3);
             }
-        } else if((*bottom++) & 0xf0) {
+        } else if((*bottom++) & 0xc0) {
             const unsigned char block[3] = HALFBLOCK_BOTTOM_CHARACTER;
             outString.resize(outString.size() + 3);
 
@@ -158,7 +145,6 @@ void frame_data_to_string(uint8_t* top, uint8_t* bottom, unsigned width, std::ve
             outString.push_back(' ');
         }
     }
-    printf("\n");
 
     outString.push_back(0);
 }
@@ -174,19 +160,80 @@ void print_usage() {
     printf("Usage: terminalapple <video|frames> <file>");
 }
 
+struct Frame {
+    uint8_t* data;
+    long usTimestamp;
+};
+
+std::mutex frameDataLock;
+Frame nextFrame;
+Frame currentFrame;
+Frame oldFrame;
+
+template<typename Pixel>
+Pixel* allocate_frame_buffer(int width, int height) {
+    Pixel* buffer = new Pixel[width*height];
+
+    return buffer;
+}
+
+void video_decoder_push_buffer(uint8_t* buffer, int64_t timestamp) {
+    std::unique_lock lock{frameDataLock};
+    assert(!nextFrame.data);
+    nextFrame = {buffer, timestamp * 1000};
+}
+
+uint8_t* video_decoder_acquire_buffer() {
+    // TODO: ew global variables
+    while(1) {
+        std::unique_lock lock{frameDataLock};
+        if(oldFrame.data) {
+            auto buffer = oldFrame.data;
+
+            oldFrame.data = nullptr;
+            return buffer;
+        }
+    }
+}
+
 int main(int argc, char** argv) {
-    if(argc < 3) {
+    static const struct option opts[] = {
+        {"width", required_argument, nullptr, 'w'},
+        {"height", required_argument, nullptr, 'h'},
+        {nullptr, 0, nullptr, 0}
+    };
+    
+    int width = 96;
+    int height = 72;
+
+    char opt;
+    while((opt = getopt_long(argc, argv, "w:h:", opts, nullptr)) != -1) {
+        Logger::Debug("opt {} {}", opt, optind);
+
+        if(opt == 'w') {
+            width = std::stoi(optarg);
+        } else if(opt == 'h') {
+            height = std::stoi(optarg);
+        }
+    }
+
+    if(argc - optind < 2) {
         print_usage();
         return 1;
     }
 
-    if(!strcmp(argv[1], "frames")) {
+    assert(width > 0 && height > 0);
+
+    const char* source = argv[optind];
+    const char* sourceFile = argv[optind + 1];
+
+    if(!strcmp(source, "frames")) {
         for(unsigned i = 1; i <= 7777; i++) {
             char filepath[PATH_MAX];
-            snprintf(filepath, PATH_MAX, "%s/frame%03d.png", argv[1], i);
+            snprintf(filepath, PATH_MAX, "%s/frame%03d.png", sourceFile, i);
 
             std::vector<uint8_t*> frameData;
-            load_image_data(filepath, frameData, 96, 64);
+            load_image_data(filepath, frameData, width, height);
 
             std::vector<std::vector<char>> strings;
 
@@ -203,8 +250,52 @@ int main(int argc, char** argv) {
             print_frame_data(strings);
             usleep(1000000 / 24);
         }
-    } else if(!strcmp(argv[1], "video")) {
-        // TODO
+    } else if(!strcmp(source, "video")) {
+        StreamContext decoder;
+        decoder.acquire_buffer = video_decoder_acquire_buffer;
+        decoder.push_buffer = video_decoder_push_buffer;
+
+        decoder.set_output_format(width,height);
+        decoder.play_track(sourceFile);
+        {
+            std::unique_lock lock{frameDataLock};
+            oldFrame.data = allocate_frame_buffer<uint8_t>(width,height);
+            currentFrame.data = allocate_frame_buffer<uint8_t>(width,height);
+            nextFrame.data = nullptr;
+        }
+
+        while(decoder.is_playing()) {
+            while(!currentFrame.data) {
+                // TODO: use condition variable 
+                usleep(4200);
+                std::unique_lock lock{frameDataLock};
+                if(nextFrame.data) {
+                    currentFrame = nextFrame;
+                    nextFrame.data = nullptr;
+                }
+            }
+
+            std::vector<std::vector<char>> strings;
+            for(unsigned i = 0; i < height; i += 2) {
+                std::vector<char> string = {};
+                frame_data_to_string(currentFrame.data + i * width, currentFrame.data + (i + 1) * width, width, string);
+                assert(string.back() == 0);
+
+                strings.push_back(std::move(string));
+            }
+
+            long sleepTime = 0;
+            {
+                std::unique_lock lock{frameDataLock};
+                sleepTime = currentFrame.usTimestamp - oldFrame.usTimestamp;
+
+                oldFrame = currentFrame;
+                currentFrame.data = nullptr;
+            }
+	        
+            usleep(sleepTime);
+            print_frame_data(strings);
+        }
     } else {
         print_usage();
         return 1;
