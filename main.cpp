@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "logger.h"
+#include "output.h"
 #include "stream_context.h"
 
 #define BLOCK_CHARACTER {0xE2,0x96,0x88}
@@ -157,13 +158,8 @@ void print_frame_data(std::vector<std::vector<char>>& rows) {
 }
 
 void print_usage() {
-    printf("Usage: terminalapple <video|frames> <file>");
+    printf("Usage: ttyapple <video|frames> <file>");
 }
-
-struct Frame {
-    uint8_t* data;
-    long usTimestamp;
-};
 
 std::mutex frameDataLock;
 Frame nextFrame;
@@ -196,15 +192,37 @@ uint8_t* video_decoder_acquire_buffer() {
     }
 }
 
+enum class OutputFormat {
+    Invalid = 0,
+    Terminal,
+    PortableC,
+    UEFI,
+};
+
+OutputFormat get_format_for_string(const char* s) {
+    if(!strcmp(s, "tty")) {
+        return OutputFormat::Terminal;
+    } else if(!strcmp(s, "c")) {
+        return OutputFormat::PortableC;
+    } else if(!strcmp(s, "uefi")) {
+        return OutputFormat::UEFI;
+    }
+
+    return OutputFormat::Invalid;
+}
+
 int main(int argc, char** argv) {
     static const struct option opts[] = {
         {"width", required_argument, nullptr, 'w'},
-        {"height", required_argument, nullptr, 'h'},
+        {"height", required_argument, nullptr, 'h'}, 
+        {"output", required_argument, nullptr, 'o'},
         {nullptr, 0, nullptr, 0}
     };
     
     int width = 96;
     int height = 72;
+
+    OutputFormat OutputFormat = OutputFormat::Terminal;
 
     char opt;
     while((opt = getopt_long(argc, argv, "w:h:", opts, nullptr)) != -1) {
@@ -214,6 +232,12 @@ int main(int argc, char** argv) {
             width = std::stoi(optarg);
         } else if(opt == 'h') {
             height = std::stoi(optarg);
+        } else if(opt == 'o') {
+            OutputFormat = get_format_for_string(optarg);
+            if(OutputFormat == OutputFormat::Invalid) {
+                printf("Invalid output '%s'! Valid options are: tty, c, uefi", optarg);
+                return 1;
+            }
         }
     }
 
