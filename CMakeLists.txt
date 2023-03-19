@@ -15,6 +15,7 @@ include_directories(${PNG_LIBRARY})
 set(SOURCES
     main.cpp
     output.cpp
+    c_output.cpp
     tty_output.cpp
     stream_context.cpp
 )
