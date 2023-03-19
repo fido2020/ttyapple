@@ -2,6 +2,7 @@
 
 #include "frame.h"
 #include "logger.h"
+#include "image.h"
 
 #include <cassert>
 #include <cstdio>
@@ -18,8 +19,8 @@ void frame_data_to_string(uint8_t* top, uint8_t* bottom, unsigned width, std::ve
     while(top < end) {
         // Cut out any alpha
         // Get rid of dark greys
-        if((*top++) & 0xc0) {
-            if((*bottom++) & 0xc0) {
+        if(GRAY_TO_MONOCHROME(*top++)) {
+            if(GRAY_TO_MONOCHROME(*bottom++)) {
                 const unsigned char block[3] = BLOCK_CHARACTER;
                 outString.resize(outString.size() + 3);
 
@@ -30,7 +31,7 @@ void frame_data_to_string(uint8_t* top, uint8_t* bottom, unsigned width, std::ve
 
                 memcpy(outString.data() + outString.size() - 3, block, 3);
             }
-        } else if((*bottom++) & 0xc0) {
+        } else if(GRAY_TO_MONOCHROME(*bottom++)) {
             const unsigned char block[3] = HALFBLOCK_BOTTOM_CHARACTER;
             outString.resize(outString.size() + 3);
 
@@ -53,13 +54,6 @@ void print_frame_data(std::vector<std::vector<char>>& rows) {
 TTYOutput::TTYOutput(int width, int height)
     : Output(width, height) {
     m_out = stdout;
-
-    m_currentFrame = new Frame;
-    m_lastFrame = new Frame;
-    m_nextFrame = nullptr;
-
-    m_currentFrame->data = allocate_frame_buffer<uint8_t>(width, height);
-    m_lastFrame->data = allocate_frame_buffer<uint8_t>(width, height);
 }
 
 TTYOutput::~TTYOutput() {
@@ -69,35 +63,6 @@ TTYOutput::~TTYOutput() {
         free_frame(m_lastFrame);
     if(m_nextFrame)
         free_frame(m_nextFrame);
-}
-
-void TTYOutput::send_frame(Frame* frame) {
-    std::unique_lock lock{m_frameLock};
-    m_frameCondition.wait(lock, [this]{return !m_nextFrame;});
-
-    assert(!m_nextFrame);
-    m_nextFrame = frame;
-
-    lock.unlock();
-    m_frameCondition.notify_all();
-}
-
-Frame* TTYOutput::acquire_frame() {
-    Frame* frame;
-
-    // Reuse the last processed frame
-
-    std::unique_lock lock{m_frameLock};
-    m_frameCondition.wait(lock, [this]{return m_lastFrame;});
-
-    assert(m_lastFrame);
-    frame = m_lastFrame;
-    m_lastFrame = nullptr;
-
-    lock.unlock();
-    m_frameCondition.notify_all();
-
-    return frame;
 }
 
 void TTYOutput::run() {

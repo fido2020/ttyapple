@@ -13,28 +13,8 @@
 #include "logger.h"
 #include "output.h"
 #include "frame.h"
+#include "image.h"
 #include "stream_context.h"
-
-// Downscale an image
-// using a really dodgy nearest neighbour algorithm
-template<typename Pixel>
-std::vector<Pixel> downscale_image(Pixel** rows, int sourceWidth, int sourceHeight, int destWidth, int destHeight) {
-    assert(sourceWidth > destWidth);
-    assert(sourceHeight > destHeight);
-    
-    std::vector<Pixel> result;
-    result.resize(destWidth * destHeight);
-    for(unsigned i = 0; i < destHeight; i++) {
-        Pixel* source = rows[sourceWidth * i / destWidth];
-        Pixel* row = &result[destWidth * i];
-
-        for(unsigned j = 0; j < destWidth; j++) {
-            row[j] = source[sourceHeight * j / destHeight];
-        }
-    }
-
-    return std::move(result);
-}
 
 void load_image_data(const char* str, std::vector<uint8_t>& data, int sWidth, int sHeight) {
     FILE* imageFile = fopen(str, "rb");
@@ -154,7 +134,7 @@ Output* make_output(OutputFormat fmt, int width, int height) {
     case OutputFormat::Terminal:
         return new TTYOutput(width, height);
     case OutputFormat::PortableC:
-        //return new COutput(width, height);
+        return new COutput("output.c", width, height);
     case OutputFormat::UEFI:
         //return new UEFIOutput(width, height);
     default:
@@ -178,8 +158,6 @@ int main(int argc, char** argv) {
 
     char opt;
     while((opt = getopt_long(argc, argv, "w:h:", opts, nullptr)) != -1) {
-        Logger::Debug("opt {} {}", opt, optind);
-
         if(opt == 'w') {
             width = std::stoi(optarg);
         } else if(opt == 'h') {
@@ -235,6 +213,8 @@ int main(int argc, char** argv) {
         while(decoder.is_playing()) {
             output->run();
         }
+
+        output->finish();
     } else {
         print_usage();
         return 1;
