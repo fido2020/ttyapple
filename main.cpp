@@ -12,35 +12,31 @@
 
 #include "logger.h"
 #include "output.h"
+#include "frame.h"
 #include "stream_context.h"
-
-#define BLOCK_CHARACTER {0xE2,0x96,0x88}
-#define HALFBLOCK_TOP_CHARACTER {0xE2, 0x96, 0x80}
-#define HALFBLOCK_BOTTOM_CHARACTER {0xE2, 0x96, 0x84}
 
 // Downscale an image
 // using a really dodgy nearest neighbour algorithm
 template<typename Pixel>
-std::vector<Pixel*> downscale_image(Pixel** rows, int sourceWidth, int sourceHeight, int destWidth, int destHeight) {
+std::vector<Pixel> downscale_image(Pixel** rows, int sourceWidth, int sourceHeight, int destWidth, int destHeight) {
     assert(sourceWidth > destWidth);
     assert(sourceHeight > destHeight);
     
-    std::vector<Pixel*> result;
+    std::vector<Pixel> result;
+    result.resize(destWidth * destHeight);
     for(unsigned i = 0; i < destHeight; i++) {
-        Pixel* row = new Pixel[destWidth];
-
         Pixel* source = rows[sourceWidth * i / destWidth];
+        Pixel* row = &result[destWidth * i];
+
         for(unsigned j = 0; j < destWidth; j++) {
             row[j] = source[sourceHeight * j / destHeight];
         }
-
-        result.push_back(row);
     }
 
     return std::move(result);
 }
 
-void load_image_data(const char* str, std::vector<uint8_t*>& data, int sWidth, int sHeight) {
+void load_image_data(const char* str, std::vector<uint8_t>& data, int sWidth, int sHeight) {
     FILE* imageFile = fopen(str, "rb");
     assert(imageFile);
 
@@ -120,76 +116,18 @@ void load_image_data(const char* str, std::vector<uint8_t*>& data, int sWidth, i
     fclose(imageFile);
 }
 
-void frame_data_to_string(uint8_t* top, uint8_t* bottom, unsigned width, std::vector<char>& outString) {
-    const uint8_t* end = top + width;
-    while(top < end) {
-        // Cut out any alpha
-        // Get rid of dark greys
-        if((*top++) & 0xc0) {
-            if((*bottom++) & 0xc0) {
-                const unsigned char block[3] = BLOCK_CHARACTER;
-                outString.resize(outString.size() + 3);
-
-                memcpy(outString.data() + outString.size() - 3, block, 3);
-            } else {
-                const unsigned char block[3] = HALFBLOCK_TOP_CHARACTER;
-                outString.resize(outString.size() + 3);
-
-                memcpy(outString.data() + outString.size() - 3, block, 3);
-            }
-        } else if((*bottom++) & 0xc0) {
-            const unsigned char block[3] = HALFBLOCK_BOTTOM_CHARACTER;
-            outString.resize(outString.size() + 3);
-
-            memcpy(outString.data() + outString.size() - 3, block, 3);
-        } else {
-            outString.push_back(' ');
-        }
-    }
-
-    outString.push_back(0);
-}
-
-void print_frame_data(std::vector<std::vector<char>>& rows) {
-    puts("\033c");
-    for(std::vector<char> r : rows) {
-        puts(r.data());
-    }
-}
-
 void print_usage() {
     printf("Usage: ttyapple <video|frames> <file>");
 }
 
-std::mutex frameDataLock;
-Frame nextFrame;
-Frame currentFrame;
-Frame oldFrame;
+Output* output;
 
-template<typename Pixel>
-Pixel* allocate_frame_buffer(int width, int height) {
-    Pixel* buffer = new Pixel[width*height];
-
-    return buffer;
+void video_decoder_push_frame(Frame* frame) {
+    output->send_frame(frame);
 }
 
-void video_decoder_push_buffer(uint8_t* buffer, int64_t timestamp) {
-    std::unique_lock lock{frameDataLock};
-    assert(!nextFrame.data);
-    nextFrame = {buffer, timestamp * 1000};
-}
-
-uint8_t* video_decoder_acquire_buffer() {
-    // TODO: ew global variables
-    while(1) {
-        std::unique_lock lock{frameDataLock};
-        if(oldFrame.data) {
-            auto buffer = oldFrame.data;
-
-            oldFrame.data = nullptr;
-            return buffer;
-        }
-    }
+Frame* video_decoder_acquire_frame() {
+    return output->acquire_frame();
 }
 
 enum class OutputFormat {
@@ -211,6 +149,20 @@ OutputFormat get_format_for_string(const char* s) {
     return OutputFormat::Invalid;
 }
 
+Output* make_output(OutputFormat fmt, int width, int height) {
+    switch(fmt) {
+    case OutputFormat::Terminal:
+        return new TTYOutput(width, height);
+    case OutputFormat::PortableC:
+        //return new COutput(width, height);
+    case OutputFormat::UEFI:
+        //return new UEFIOutput(width, height);
+    default:
+        Logger::Error("Invalid output format {}!", (int)fmt);
+        return nullptr;
+    };
+}
+
 int main(int argc, char** argv) {
     static const struct option opts[] = {
         {"width", required_argument, nullptr, 'w'},
@@ -222,7 +174,7 @@ int main(int argc, char** argv) {
     int width = 96;
     int height = 72;
 
-    OutputFormat OutputFormat = OutputFormat::Terminal;
+    OutputFormat outputFormat = OutputFormat::Terminal;
 
     char opt;
     while((opt = getopt_long(argc, argv, "w:h:", opts, nullptr)) != -1) {
@@ -233,8 +185,8 @@ int main(int argc, char** argv) {
         } else if(opt == 'h') {
             height = std::stoi(optarg);
         } else if(opt == 'o') {
-            OutputFormat = get_format_for_string(optarg);
-            if(OutputFormat == OutputFormat::Invalid) {
+            outputFormat = get_format_for_string(optarg);
+            if(outputFormat == OutputFormat::Invalid) {
                 printf("Invalid output '%s'! Valid options are: tty, c, uefi", optarg);
                 return 1;
             }
@@ -252,73 +204,36 @@ int main(int argc, char** argv) {
     const char* sourceFile = argv[optind + 1];
 
     if(!strcmp(source, "frames")) {
+        output = make_output(outputFormat, width, height);
+        assert(output);
+
         for(unsigned i = 1; i <= 7777; i++) {
             char filepath[PATH_MAX];
             snprintf(filepath, PATH_MAX, "%s/frame%03d.png", sourceFile, i);
 
-            std::vector<uint8_t*> frameData;
+            std::vector<uint8_t> frameData;
             load_image_data(filepath, frameData, width, height);
 
-            std::vector<std::vector<char>> strings;
+            Frame* frame = output->acquire_frame();
+            frame->usTimestamp = 1000000 / 24 * i;
+            frame->data = frameData.data();
 
-            for(unsigned i = 0; i < frameData.size(); i += 2) {
-                std::vector<char> string = {};
-                frame_data_to_string(frameData[i], frameData[i + 1], 96, string);
-                delete frameData[i];
-                delete frameData[i + 1];
-
-                assert(string.back() == 0);
-
-                strings.push_back(std::move(string));
-            }
-            print_frame_data(strings);
-            usleep(1000000 / 24);
+            output->send_frame(frame);
+            output->run();
         }
     } else if(!strcmp(source, "video")) {
+        output = make_output(outputFormat, width, height);
+        assert(output);
+
         StreamContext decoder;
-        decoder.acquire_buffer = video_decoder_acquire_buffer;
-        decoder.push_buffer = video_decoder_push_buffer;
+        decoder.acquire_buffer = video_decoder_acquire_frame;
+        decoder.push_buffer = video_decoder_push_frame;
 
         decoder.set_output_format(width,height);
         decoder.play_track(sourceFile);
-        {
-            std::unique_lock lock{frameDataLock};
-            oldFrame.data = allocate_frame_buffer<uint8_t>(width,height);
-            currentFrame.data = allocate_frame_buffer<uint8_t>(width,height);
-            nextFrame.data = nullptr;
-        }
 
         while(decoder.is_playing()) {
-            while(!currentFrame.data) {
-                // TODO: use condition variable 
-                usleep(4200);
-                std::unique_lock lock{frameDataLock};
-                if(nextFrame.data) {
-                    currentFrame = nextFrame;
-                    nextFrame.data = nullptr;
-                }
-            }
-
-            std::vector<std::vector<char>> strings;
-            for(unsigned i = 0; i < height; i += 2) {
-                std::vector<char> string = {};
-                frame_data_to_string(currentFrame.data + i * width, currentFrame.data + (i + 1) * width, width, string);
-                assert(string.back() == 0);
-
-                strings.push_back(std::move(string));
-            }
-
-            long sleepTime = 0;
-            {
-                std::unique_lock lock{frameDataLock};
-                sleepTime = currentFrame.usTimestamp - oldFrame.usTimestamp;
-
-                oldFrame = currentFrame;
-                currentFrame.data = nullptr;
-            }
-	        
-            usleep(sleepTime);
-            print_frame_data(strings);
+            output->run();
         }
     } else {
         print_usage();

@@ -1,5 +1,6 @@
 #include "stream_context.h"
 
+#include "frame.h"
 #include "logger.h"
 
 #include <assert.h>
@@ -66,10 +67,13 @@ void StreamContext::decode_video(AVPacket* packet) {
         std::unique_lock lockSurface{surfaceLock};
 
         int stride = m_outputWidth;
-        uint8_t* buffer = acquire_buffer();
+        Frame* buffer = acquire_buffer();
 
-        sws_scale(m_rescaler, frame->data, frame->linesize, 0, m_vcodec->height, &buffer, &stride);
-        push_buffer(buffer, packet->pts);
+        sws_scale(m_rescaler, frame->data, frame->linesize, 0, m_vcodec->height, &buffer->data, &stride);
+        // PTS is in milliseconds
+        buffer->usTimestamp = packet->pts * 1000;
+
+        push_buffer(buffer);
         m_lastTimestamp = packet->pts / 1000.0;
 
         av_frame_unref(frame);

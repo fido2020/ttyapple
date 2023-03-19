@@ -47,8 +47,8 @@ public:
     // Lock when using/changing m_surface
     std::mutex surfaceLock;
 
-    uint8_t*(*acquire_buffer)() = nullptr;
-    void(*push_buffer)(uint8_t*, long) = nullptr;
+    struct Frame*(*acquire_buffer)() = nullptr;
+    void(*push_buffer)(struct Frame*) = nullptr;
 
 private:
     // Decoder Loop

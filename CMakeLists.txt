@@ -1,3 +1,5 @@
+project(ttyapple)
+
 set(CMAKE_CXX_STANDARD 20)
 
 find_library(AVCODEC_LIBRARY avcodec)
@@ -12,6 +14,7 @@ include_directories(${PNG_LIBRARY})
 
 set(SOURCES
     main.cpp
+    output.cpp
     tty_output.cpp
     stream_context.cpp
 )
