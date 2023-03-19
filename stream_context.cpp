@@ -71,10 +71,10 @@ void StreamContext::decode_video(AVPacket* packet) {
 
         sws_scale(m_rescaler, frame->data, frame->linesize, 0, m_vcodec->height, &buffer->data, &stride);
         // PTS is in milliseconds
-        buffer->usTimestamp = packet->pts * 1000;
+        buffer->usTimestamp = (long)(frame->best_effort_timestamp * (av_q2d(m_videoStream->time_base) * 1000000));
 
         push_buffer(buffer);
-        m_lastTimestamp = packet->pts / 1000.0;
+        m_lastTimestamp = frame->best_effort_timestamp / 1000.0;
 
         av_frame_unref(frame);
     }

@@ -3,11 +3,13 @@
 #include "frame.h"
 #include "logger.h"
 #include "image.h"
+#include "time.h"
 
 #include <cassert>
 #include <cstdio>
 #include <cstring>
 
+#include <chrono>
 #include <vector>
 
 #define BLOCK_CHARACTER {0xE2,0x96,0x88}
@@ -107,12 +109,19 @@ void TTYOutput::run() {
 
     // Sleep until it is time to draw the next frame
     if(m_lastFrameTimestamp >= 0) {
-        long sleepTime = currentTs - m_lastFrameTimestamp;
-        usleep(sleepTime);
+        long sleepTime = (currentTs - m_lastFrameTimestamp)
+             - std::chrono::duration_cast<std::chrono::microseconds>(m_lastFrameDrawn - std::chrono::steady_clock::now()).count();
+
+        // Don't sleep for any more than a second
+        if(sleepTime > 0 && sleepTime < 1000000) {
+            usleep(sleepTime);
+        }
     }
 
-    m_lastFrameTimestamp = currentTs;
-
     print_frame_data(strings);
+
+    m_lastFrameTimestamp = currentTs;
+    m_lastFrameDrawn = std::chrono::steady_clock::now();
+
     Logger::Debug("ts: {}", currentTs);
 }
