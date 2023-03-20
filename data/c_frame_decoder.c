@@ -1,30 +1,16 @@
-#include <stdio.h>
 #include <stdint.h>
 
-#ifdef __unix
+#if defined(WIN32)
 
-#include <unistd.h>
+#define ENCODING_CP437
 
-#define us_sleep(x) usleep(x)
+#elif defined(UEFI)
 
-#elif WIN32
-
-#include <windows.h>
-#define us_sleep(x) Sleep(x / 1000)
-
-#else
-
-// We're shit out of luck
-#define us_sleep(x)
+#define ENCODING_UTF16
 
 #endif
 
-#include "frames.h"
-
-#define FRAME_INTERVAL (1000000 / 24)
-
-#define FRAME_WIDTH 96
-#define FRAME_HEIGHT 72
+#include "frames.inc"
 
 #define FRAME_STRIDE ((FRAME_WIDTH + 7) / 8)
 
@@ -32,27 +18,70 @@
     #error "FRAME_HEIGHT must be divisible by 2!"
 #endif
 
-#define UTF8_BLOCK {0xE2,0x96,0x88}
-#define UTF8_HALFBLOCK_TOP {0xE2, 0x96, 0x80}
-#define UTF8_HALFBLOCK_BOTTOM {0xE2, 0x96, 0x84}
+#if defined(ENCODING_CP437)
 
-#define CP437_BLOCK_CHARACTER {0xDB}
-#define CP437_HALFBLOCK_TOP {0xDF}
-#define CP437_HALFBLOCK_BOTTOM {0xDC}
+typedef char tty_char_t;
 
-int main() {
+#define CP437_BLOCK_CHARACTER 0xDB
+#define CP437_HALFBLOCK_TOP 0xDF
+#define CP437_HALFBLOCK_BOTTOM 0xDC
+
+#define put_block_character(text, i) text[i++] = CP437_BLOCK_CHARACTER;
+#define put_block_top_character(text, i) text[i++] = CP437_HALFBLOCK_TOP;
+#define put_block_bottom_character(text, i) text[i++] = CP437_HALFBLOCK_BOTTOM;
+#define put_blank_character(text, i) text[i++] = ' ';
+#define put_line_ending(text, i) text[i++] = '\r'; text[i++] = '\n';
+
+#elif defined(ENCODING_UTF16)
+
+typedef uint16_t tty_char_t;
+
+#define UTF16_BLOCK 0x2588
+#define UTF16_HALFBLOCK_TOP 0x2580
+#define UTF16_HALFBLOCK_BOTTOM 0x2584
+
+#define put_block_character(text, i) text[i++] = UTF16_BLOCK;
+#define put_block_top_character(text, i) text[i++] = UTF16_HALFBLOCK_TOP;
+#define put_block_bottom_character(text, i) text[i++] = UTF16_HALFBLOCK_BOTTOM;
+#define put_blank_character(text, i) text[i++] = ' ';
+#define put_line_ending(text, i) text[i++] = '\r'; text[i++] = '\n';
+
+#else
+
+typedef char tty_char_t;
+
+#define UTF8_BLOCK_0 0xE2
+#define UTF8_BLOCK_1 0x96
+
+#define UTF8_BLOCK_2 0x88
+#define UTF8_HALFBLOCK_TOP_2 0x80
+#define UTF8_HALFBLOCK_BOTTOM_2 0x84
+
+#define put_block_character(text, i) text[i++] = UTF8_BLOCK_0; \
+    text[i++] = UTF8_BLOCK_1; text[i++] = UTF8_BLOCK_2;
+#define put_block_top_character(text, i) text[i++] = UTF8_BLOCK_0; \
+    text[i++] = UTF8_BLOCK_1; text[i++] = UTF8_HALFBLOCK_TOP_2;
+#define put_block_bottom_character(text, i) text[i++] = UTF8_BLOCK_0; \
+    text[i++] = UTF8_BLOCK_1; text[i++] = UTF8_HALFBLOCK_BOTTOM_2;
+#define put_blank_character(text, i) text[i++] = ' ';
+#define put_line_ending(text, i) text[i++] = '\n';
+
+#endif
+
+void us_sleep(long us);
+void reset_cursor();
+void print_text(tty_char_t* text);
+
+// Very lazy but let's just multiply the frame width by 3 to account
+// for the unicode characters.
+tty_char_t text[(FRAME_WIDTH * 3 + 1) * (FRAME_HEIGHT / 2) + 1];
+
+int play_frames() {
     int framesLeft = FRAME_COUNT;
 
-    // Very lazy but let's just multiply the frame width by 3 to account
-    // for the unicode characters.
-    char text[(FRAME_WIDTH * 3 + 1) * (FRAME_HEIGHT / 2) + 1];
-
-    const char block[] = UTF8_BLOCK;
-    const char topBlock[] = UTF8_HALFBLOCK_TOP;
-    const char bottomBlock[] = UTF8_HALFBLOCK_BOTTOM;
-
+    uint8_t** _frames = frames;
     while(framesLeft--) {
-        uint8_t* frame = *(frames++);
+        uint8_t* frame = *(_frames++);
         
         int i = 0;
         for(int row = 0; row < FRAME_HEIGHT; row += 2) {
@@ -65,37 +94,37 @@ int main() {
                 uint8_t p2 = *(bottom++);
 
                 int p = 7;
-                if(p > FRAME_WIDTH - i - 1) {
-                    p = 7 - (FRAME_WIDTH - i - 1);
+                if(p > FRAME_WIDTH - c - 1) {
+                    p = 7 - (FRAME_WIDTH - c - 1);
                 }
+
+                c += (p + 1);
 
                 while(p >= 0) {
                     if(((p1 >> p) & 1)) {
                         if((p2 >> p) & 1) {
-                            text[i++] = block[0];
-                            text[i++] = block[1];
-                            text[i++] = block[2];
-                            text[i++] = topBlock[1];
-                            text[i++] = topBlock[2];
+                            put_block_character(text, i);
+                        } else {
+                            put_block_top_character(text, i);
                         }
                     } else if((p2 >> p) & 1) {
-                        text[i++] = bottomBlock[0];
-                        text[i++] = bottomBlock[1];
-                        text[i++] = bottomBlock[2];
+                        put_block_bottom_character(text, i);
                     } else {
-                        text[i] = ' ';
+                        put_blank_character(text, i);
                     }
 
-                    c++;
+                    p--;
                 }
             }
 
             // End the line
-            text[i] = '\n';
+            put_line_ending(text, i);
         }
 
-        text[i] = 0;
-        puts(text);
+        text[i++] = 0;
+
+        reset_cursor();
+        print_text(text);
 
         us_sleep(FRAME_INTERVAL);
     }
