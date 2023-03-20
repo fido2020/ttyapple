@@ -124,7 +124,11 @@ void COutput::finish() {
         frameNames.push_back(fmt::format("frame{}", i));
     }
 
-    std::string text = fmt::format("#define FRAME_COUNT ({})\n\n", m_frameIndex);
+    std::string text =
+        fmt::format("#define FRAME_COUNT ({})\n#define FRAME_WIDTH ({})\n\
+        #define FRAME_HEIGHT ({})\n#define FRAME_INTERVAL ({})\n",
+            m_frameIndex, m_width, m_height, 1000000 / 24);
+
     text += generate_c_array("uint8_t*", "frames", frameNames);
     fwrite(text.c_str(), 1, text.length(), m_out);
 
