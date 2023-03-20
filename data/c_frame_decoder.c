@@ -10,8 +10,6 @@
 
 #endif
 
-#include "frames.inc"
-
 #define FRAME_STRIDE ((FRAME_WIDTH + 7) / 8)
 
 #if (FRAME_HEIGHT % 2)
@@ -76,7 +74,7 @@ void print_text(tty_char_t* text);
 // for the unicode characters.
 tty_char_t text[(FRAME_WIDTH * 3 + 1) * (FRAME_HEIGHT / 2) + 1];
 
-int play_frames() {
+void play_frames() {
     int framesLeft = FRAME_COUNT;
 
     uint8_t** _frames = frames;
@@ -128,6 +126,4 @@ int play_frames() {
 
         us_sleep(FRAME_INTERVAL);
     }
-
-    return 0;
 }

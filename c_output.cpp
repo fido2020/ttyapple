@@ -65,6 +65,12 @@ COutput::COutput(int width, int height)
     m_packedPixelBuffer = new uint8_t[((width + 7) / 8) * height];
 }
 
+COutput::~COutput() {
+    fclose(m_out);
+
+    m_out = nullptr;
+}
+
 int COutput::open_file(const char* path) {
     m_out = fopen(path, "wb");
     if(!m_out) {
@@ -124,7 +130,7 @@ void COutput::run() {
 
 void COutput::finish() {
     assert(m_out);
-    
+
     std::vector<std::string> frameNames;
     for(int i = 0; i < m_frameIndex; i++) {
         frameNames.push_back(fmt::format("frame{}", i));
@@ -137,8 +143,4 @@ void COutput::finish() {
 
     text += generate_c_array("uint8_t*", "frames", frameNames);
     fwrite(text.c_str(), 1, text.length(), m_out);
-
-    fclose(m_out);
-
-    m_out = nullptr;
 }

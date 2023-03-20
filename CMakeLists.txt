@@ -17,6 +17,7 @@ set(SOURCES
     output.cpp
     c_output.cpp
     tty_output.cpp
+    uefi_output.cpp
     stream_context.cpp
 )
 

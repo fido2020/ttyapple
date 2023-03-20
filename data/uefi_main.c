@@ -1,5 +1,5 @@
-#include <uefi/UefiBaseType.h>
-#include <uefi/UefiSpec.h>
+#include <UefiBaseType.h>
+#include <UefiSpec.h>
 
 void play_frames();
 

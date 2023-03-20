@@ -49,18 +49,38 @@ private:
 
 class COutput : public Output {
 public:
-    COutput(const char* file, int width, int height);
+    COutput(int width, int height);
+    virtual ~COutput();
+
+    int open_file(const char* path);
 
     void run() override;
-    void finish() override;
+    virtual void finish() override;
 
 protected:
-    FILE* m_out;
+    FILE* m_out = nullptr;
 
     uint8_t* m_packedPixelBuffer;
     int m_frameIndex = 0;
 };
 
-class UEFIOutput : public Output {
+class UEFIOutput : public COutput {
 public:
+    UEFIOutput(int width, int height);
+
+    void set_output_file(const char* path);
+
+    void finish() override;
+private:
+    std::string m_outputPath;
+
+    std::string m_compiler;
+    std::string m_linker;
+
+    FILE* m_decodeSource;
+    FILE* m_uefiMainSource;
+
+    int m_pipe[2];
+
+    pid_t m_compilerPID;
 };
