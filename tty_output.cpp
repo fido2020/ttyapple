@@ -41,6 +41,23 @@ void frame_data_to_string(uint8_t* top, uint8_t* bottom, unsigned width, std::ve
         } else {
             outString.push_back(' ');
         }
+
+        // Should probably add some sort of command line switch for this,
+        // supports grey in the terminal.
+        // Very slow and flickery tho
+    #if 0
+        uint8_t t = (*top++) / 11;
+        uint8_t b = (*bottom++) / 11;
+
+        std::string c = fmt::format("\033[38;5;{}m\033[48;5;{}m", 232 + t, 232 + b);
+        outString.insert(outString.end(), c.begin(), c.end());
+
+        const unsigned char block[3] = HALFBLOCK_TOP_CHARACTER;
+        outString.resize(outString.size() + 3);
+
+        memcpy(outString.data() + outString.size() - 3, block, 3);
+    #endif
+
     }
 
     outString.push_back(0);
@@ -122,6 +139,4 @@ void TTYOutput::run() {
 
     m_lastFrameTimestamp = currentTs;
     m_lastFrameDrawn = std::chrono::steady_clock::now();
-
-    Logger::Debug("ts: {}", currentTs);
 }

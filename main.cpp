@@ -134,9 +134,9 @@ Output* make_output(OutputFormat fmt, int width, int height) {
     case OutputFormat::Terminal:
         return new TTYOutput(width, height);
     case OutputFormat::PortableC:
-        return new COutput("output.c", width, height);
+        return new COutput(width, height);
     case OutputFormat::UEFI:
-        //return new UEFIOutput(width, height);
+        return new UEFIOutput(width, height);
     default:
         Logger::Error("Invalid output format {}!", (int)fmt);
         return nullptr;
@@ -181,10 +181,16 @@ int main(int argc, char** argv) {
     const char* source = argv[optind];
     const char* sourceFile = argv[optind + 1];
 
-    if(!strcmp(source, "frames")) {
-        output = make_output(outputFormat, width, height);
-        assert(output);
+    output = make_output(outputFormat, width, height);
+    assert(output);
 
+    if(outputFormat == OutputFormat::PortableC) {
+        if(((COutput*)output)->open_file("output.c")) {
+            return 2;
+        }
+    }
+
+    if(!strcmp(source, "frames")) {
         for(unsigned i = 1; i <= 7777; i++) {
             char filepath[PATH_MAX];
             snprintf(filepath, PATH_MAX, "%s/frame%03d.png", sourceFile, i);
@@ -200,9 +206,6 @@ int main(int argc, char** argv) {
             output->run();
         }
     } else if(!strcmp(source, "video")) {
-        output = make_output(outputFormat, width, height);
-        assert(output);
-
         StreamContext decoder;
         decoder.acquire_buffer = video_decoder_acquire_frame;
         decoder.push_buffer = video_decoder_push_frame;

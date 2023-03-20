@@ -56,14 +56,8 @@ std::string generate_c_array_u8(const std::string& name, uint8_t* values, unsign
     return result;
 }
 
-COutput::COutput(const char* file, int width, int height)
+COutput::COutput(int width, int height)
     : Output(width, height) {
-    m_out = fopen(file, "wb");
-    if(!m_out) {
-        Logger::Error("Failed to open '{}' for writing!", file);
-        // TODO: pass errors back to the caller
-        std::terminate();
-    }
 
     // Create a buffer to place the packed monochrome pixels of each frame in,
     // rather than reallocating one every frame.
@@ -71,7 +65,17 @@ COutput::COutput(const char* file, int width, int height)
     m_packedPixelBuffer = new uint8_t[((width + 7) / 8) * height];
 }
 
+int COutput::open_file(const char* path) {
+    m_out = fopen(path, "wb");
+    if(!m_out) {
+        Logger::Error("Failed to open '{}' for writing!", path);
+        return 1;
+    }
+}
+
 void COutput::run() {
+    assert(m_out);
+
     std::unique_lock lock{m_frameLock};
     // TODO: Should probably figure out a clean way to use condition_variable
     // so this function doesn't hog the lock.
@@ -119,6 +123,8 @@ void COutput::run() {
 }
 
 void COutput::finish() {
+    assert(m_out);
+    
     std::vector<std::string> frameNames;
     for(int i = 0; i < m_frameIndex; i++) {
         frameNames.push_back(fmt::format("frame{}", i));
