@@ -10,10 +10,11 @@
 #include <cstring>
 #include <vector>
 
-#include "logger.h"
-#include "output.h"
 #include "frame.h"
 #include "image.h"
+#include "logger.h"
+#include "output.h"
+#include "paths.h"
 #include "stream_context.h"
 
 void load_image_data(const char* str, std::vector<uint8_t>& data, int sWidth, int sHeight) {
@@ -176,6 +177,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    find_run_path(argv[0]);
+
     assert(width > 0 && height > 0);
 
     const char* source = argv[optind];
@@ -205,6 +208,9 @@ int main(int argc, char** argv) {
             output->send_frame(frame);
             output->run();
         }
+
+        output->finish();
+        delete output;
     } else if(!strcmp(source, "video")) {
         StreamContext decoder;
         decoder.acquire_buffer = video_decoder_acquire_frame;
@@ -218,6 +224,7 @@ int main(int argc, char** argv) {
         }
 
         output->finish();
+        delete output;
     } else {
         print_usage();
         return 1;

@@ -1,6 +1,7 @@
 #include "output.h"
 
 #include "logger.h"
+#include "paths.h"
 
 #include <cassert>
 #include <cstdlib>
@@ -8,51 +9,15 @@
 #include <string>
 #include <vector>
 
+// TODO: move unix specifics into a separate file
 #include <fcntl.h>
+#include <libgen.h>
 
 #include <sys/wait.h>
 
-std::vector<std::string> get_path() {
-    const char* v = getenv("PATH");
-    assert(v);
-
-    std::vector<std::string> paths;
-
-    std::string path;
-    while(*v) {
-        if(*v == ':') {
-            paths.push_back(std::move(path));
-            path.clear();
-        } else {
-            path += *v;
-        }
-
-        v++;
-    }
-
-    return paths;
-}
-
-std::string locate_executable(const std::vector<std::string>& paths, const std::string& name) {
-    std::string path;
-    for(const auto& p : paths) {
-        if(p.ends_with('/')) {
-            path = p + name;
-        } else {
-            path = p + '/' + name;
-        }
-
-        if(access(path.c_str(), X_OK) == 0) {
-            return path;
-        }
-    }
-
-    return "";
-}
-
 UEFIOutput::UEFIOutput(int width, int height)
     : COutput(width, height) {
-    auto paths = get_path();
+    auto paths = get_path_var();
 
     m_compiler = locate_executable(paths, "clang");
     // lld-link is the Windows linker
@@ -71,15 +36,21 @@ UEFIOutput::UEFIOutput(int width, int height)
         std::terminate();
     }
 
-    m_decodeSource = fopen("data/c_frame_decoder.c", "r");
+    // Get the directory of this executable,
+    // dirname may modify the path string so make sure to duplicate it
+    char* runpath = strdup(get_run_path());
+    std::string exeDir = dirname(runpath);
+    delete runpath;
+
+    m_decodeSource = fopen((exeDir + "/data/c_frame_decoder.c").c_str(), "r");
     if(!m_decodeSource) {
-        Logger::Debug("Error opening 'data/c_frame_decoder.c': {}!", strerror(errno));
+        Logger::Debug("Error opening '{}/data/c_frame_decoder.c': {}!", exeDir, strerror(errno));
         std::terminate();
     }
 
-    m_uefiMainSource = fopen("data/uefi_main.c", "r");
+    m_uefiMainSource = fopen((exeDir + "/data/uefi_main.c").c_str(), "r");
     if(!m_uefiMainSource) {
-        Logger::Debug("Error opening 'data/uefi_main.c': {}!", strerror(errno));
+        Logger::Debug("Error opening '{}/data/uefi_main.c': {}!", exeDir, strerror(errno));
         std::terminate();
     }
 
@@ -111,7 +82,9 @@ UEFIOutput::UEFIOutput(int width, int height)
     // Defines
     clangArguments.push_back(strdup("-DMDE_CPU_X64"));
     clangArguments.push_back(strdup("-DUEFI"));
-    clangArguments.push_back(strdup("-Iuefi"));
+
+    std::string uefiIncludeDir = "-I" + exeDir + "/data/uefi";
+    clangArguments.push_back(strdup(uefiIncludeDir.c_str()));
 
     clangArguments.push_back(strdup("-Wno-microsoft-static-assert"));
 
@@ -171,7 +144,10 @@ void UEFIOutput::finish() {
     }
 
     while((result = fread(buf, 1, 0x2000, m_uefiMainSource)) > 0) {
-        fwrite(buf, 1, result, m_out);
+        if(fwrite(buf, 1, result, m_out) != result) {
+            // Likely encountered some error
+            break;
+        }
     }
 
     if(ferror(m_uefiMainSource)) {

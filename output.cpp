@@ -43,4 +43,8 @@ Frame* Output::acquire_frame() {
     return frame;
 }
 
+void Output::set_interlacing(bool enabled) {
+    m_interlaced = enabled;
+}
+
 void Output::finish() {}

@@ -66,9 +66,7 @@ COutput::COutput(int width, int height)
 }
 
 COutput::~COutput() {
-    fclose(m_out);
-
-    m_out = nullptr;
+    close_file();
 }
 
 int COutput::open_file(const char* path) {
@@ -76,6 +74,17 @@ int COutput::open_file(const char* path) {
     if(!m_out) {
         Logger::Error("Failed to open '{}' for writing!", path);
         return 1;
+    }
+
+    fprintf(m_out, "#include <stdint.h>\n");
+
+    return 0;
+}
+
+void COutput::close_file() {
+    if(m_out) {
+        fclose(m_out);
+        m_out = nullptr;
     }
 }
 
@@ -98,18 +107,39 @@ void COutput::run() {
     m_frameCondition.notify_all();
 
     int stride = (m_width + 7) / 8;
-    for(int i = 0; i < m_height; i++) {
-        // Each row is padded to 8-bits,
-        // so pack the pixels one row at a time
-        pack_monochrome_pxls(m_packedPixelBuffer + i * stride,
-                             m_currentFrame->data + i * m_width, m_width);
+
+    std::string array;
+    if(m_interlaced) {
+        for(int i = (m_frameIndex % 2) * 2; i < m_height / 2; i += 2) {
+            // Each row is padded to 8-bits,
+            // so pack the pixels one row at a time
+            pack_monochrome_pxls(m_packedPixelBuffer + i * stride,
+                                m_currentFrame->data + (i * 2) * m_width, m_width);
+            pack_monochrome_pxls(m_packedPixelBuffer + (i + 1) * stride,
+                                m_currentFrame->data + (i * 2 + 1) * m_width, m_width);
+        }
+
+        array = generate_c_array_u8(fmt::format("frame{}", m_frameIndex),
+                                    m_packedPixelBuffer,
+                                    stride * m_height / 2);
+    } else {
+        for(int i = 0; i < m_height; i++) {
+            // Each row is padded to 8-bits,
+            // so pack the pixels one row at a time
+            pack_monochrome_pxls(m_packedPixelBuffer + i * stride,
+                                m_currentFrame->data + i * m_width, m_width);
+        }
+        array = generate_c_array_u8(fmt::format("frame{}", m_frameIndex),
+                                    m_packedPixelBuffer,
+                                    stride * m_height);
     }
 
-    std::string array =
-        generate_c_array_u8(fmt::format("frame{}", m_frameIndex),m_packedPixelBuffer,
-                            stride * m_height);
 
-    fwrite(array.c_str(), 1, array.length(), m_out);
+    size_t written = fwrite(array.c_str(), 1, array.length(), m_out);
+    if(written == 0 && ferror(m_out)) {
+        Logger::Error("Error writing C file: {}", strerror(errno));
+        std::terminate();
+    }
 
     m_frameIndex++;
 
@@ -141,6 +171,11 @@ void COutput::finish() {
         #define FRAME_HEIGHT ({})\n#define FRAME_INTERVAL ({})\n",
             m_frameIndex, m_width, m_height, 1000000 / 24);
 
+    if(m_interlaced) {
+        text += "#define USE_INTERLACING\n";
+    }
+
     text += generate_c_array("uint8_t*", "frames", frameNames);
     fwrite(text.c_str(), 1, text.length(), m_out);
+    fflush(m_out);
 }

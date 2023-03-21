@@ -14,14 +14,18 @@ include_directories(${PNG_LIBRARY})
 
 set(SOURCES
     main.cpp
+    paths.cpp
+    stream_context.cpp
+
     output.cpp
     c_output.cpp
     tty_output.cpp
     uefi_output.cpp
-    stream_context.cpp
 )
 
 add_executable(ttyapple ${SOURCES})
+
+install(DIRECTORY data DESTINATION ${INSTALL_PATH}/data)
 
 target_link_libraries(ttyapple
     fmt::fmt

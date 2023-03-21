@@ -14,6 +14,8 @@ public:
     virtual void send_frame(Frame* frame);
     virtual Frame* acquire_frame();
 
+    void set_interlacing(bool enabled);
+
     virtual void run() = 0;
     virtual void finish();
 
@@ -32,6 +34,8 @@ protected:
     Frame* m_nextFrame;
 
     long m_lastFrameTimestamp = -1;
+
+    bool m_interlaced = false;
 };
 
 class TTYOutput : public Output {
@@ -53,6 +57,7 @@ public:
     virtual ~COutput();
 
     int open_file(const char* path);
+    void close_file();
 
     void run() override;
     virtual void finish() override;

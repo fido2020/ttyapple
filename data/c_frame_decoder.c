@@ -30,6 +30,8 @@ typedef char tty_char_t;
 #define put_blank_character(text, i) text[i++] = ' ';
 #define put_line_ending(text, i) text[i++] = '\r'; text[i++] = '\n';
 
+#define LINE_WIDTH_MULTIPLIER 1
+
 #elif defined(ENCODING_UTF16)
 
 typedef uint16_t tty_char_t;
@@ -43,6 +45,8 @@ typedef uint16_t tty_char_t;
 #define put_block_bottom_character(text, i) text[i++] = UTF16_HALFBLOCK_BOTTOM;
 #define put_blank_character(text, i) text[i++] = ' ';
 #define put_line_ending(text, i) text[i++] = '\r'; text[i++] = '\n';
+
+#define LINE_WIDTH_MULTIPLIER 1
 
 #else
 
@@ -64,6 +68,8 @@ typedef char tty_char_t;
 #define put_blank_character(text, i) text[i++] = ' ';
 #define put_line_ending(text, i) text[i++] = '\n';
 
+#define LINE_WIDTH_MULTIPLIER 3
+
 #endif
 
 void us_sleep(long us);
@@ -72,20 +78,28 @@ void print_text(tty_char_t* text);
 
 // Very lazy but let's just multiply the frame width by 3 to account
 // for the unicode characters.
-tty_char_t text[(FRAME_WIDTH * 3 + 1) * (FRAME_HEIGHT / 2) + 1];
+tty_char_t text[(FRAME_WIDTH * LINE_WIDTH_MULTIPLIER + 2) * (FRAME_HEIGHT / 2) + 1];
 
 void play_frames() {
-    int framesLeft = FRAME_COUNT;
+    int frameIndex = 0;
 
     uint8_t** _frames = frames;
-    while(framesLeft--) {
+    while(frameIndex < FRAME_COUNT) {
         uint8_t* frame = *(_frames++);
         
         int i = 0;
+#ifdef USE_INTERLACING
+        if(frameIndex & 1) {
+            put_line_ending(text, i);
+        }
+
+        for(int row = 0; row < FRAME_HEIGHT / 2; row += 2) {
+#else
         for(int row = 0; row < FRAME_HEIGHT; row += 2) {
+#endif
             uint8_t* top = frame + FRAME_STRIDE * row;
             uint8_t* bottom = frame + FRAME_STRIDE * (row + 1);
-            
+
             int c = 0;
             while(c < FRAME_WIDTH) {
                 uint8_t p1 = *(top++);
@@ -117,6 +131,10 @@ void play_frames() {
 
             // End the line
             put_line_ending(text, i);
+#ifdef USE_INTERLACING
+            // Put an extra line ending if interlacing is enabled
+            put_line_ending(text, i);
+#endif
         }
 
         text[i++] = 0;
@@ -125,5 +143,7 @@ void play_frames() {
         print_text(text);
 
         us_sleep(FRAME_INTERVAL);
+
+        frameIndex++;
     }
 }
